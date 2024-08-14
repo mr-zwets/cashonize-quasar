@@ -5,13 +5,14 @@
   import settingsMenu from 'src/components/settingsMenu.vue'
   import connectView from 'src/components/walletConnect.vue'
   import createTokensView from 'src/components/createTokens.vue'
+  import walletHistoryView from 'src/components/history/walletHistory.vue'
   import WC2TransactionRequest from 'src/components/walletconnect/WC2TransactionRequest.vue';
   import WC2SignMessageRequest from 'src/components/walletconnect/WCSignMessageRequest.vue'
   import { ref, computed } from 'vue'
   import { Wallet, TestNetWallet, BalanceResponse, binToHex, Connection, ElectrumNetworkProvider } from 'mainnet-js'
-  import type { CancelWatchFn } from 'mainnet-js';
+  import type { CancelWatchFn, HexHeaderI } from 'mainnet-js';
   import { convertElectrumTokenData } from "src/utils/utils"
-  import type { TokenList } from "../interfaces/interfaces"
+  import type { TokenData, TokenList } from "../interfaces/interfaces"
   import type { Web3WalletTypes } from '@walletconnect/web3wallet';
   import { useStore } from 'src/stores/store'
   import { useSettingsStore } from 'src/stores/settingsStore'
@@ -26,19 +27,25 @@
   const isMobile = computed(() => width.value < 480)
 
   const props = defineProps<{
-    uri: string | undefined
+    uri: string | undefined,
+    addTokenId?: string,
   }>()
+
+  if (props.addTokenId) {
+    store.addToFavorites(props.addTokenId);
+  }
 
   const nameWallet = 'mywallet';
   let cancelWatchBchtxs: undefined | CancelWatchFn;
   let cancelWatchTokenTxs: undefined | CancelWatchFn;
+  let cancelWatchBlocks: undefined | CancelWatchFn;
 
   const displayView = ref(undefined as (number | undefined));
   const transactionRequestWC = ref(undefined as any);
   const signMessageRequestWC = ref(undefined as any);
   const dappMetadata = ref(undefined as any);
   const dappUriUrlParam = ref(undefined as undefined|string);
-  
+
   // check if wallet exists
   const mainnetWalletExists = await Wallet.namedExists(nameWallet);
   const testnetWalletExists = await TestNetWallet.namedExists(nameWallet);
@@ -74,7 +81,7 @@
     }
     // fetch bch balance
     console.time('Balance Promises');
-    const promiseWalletBalance = store.wallet.getBalance() as BalanceResponse;
+    const promiseWalletBalance = store.wallet.getBalance() as Promise<BalanceResponse>;
     const promiseMaxAmountToSend = store.wallet.getMaxAmountToSend();
     const balancePromises = [promiseWalletBalance,promiseMaxAmountToSend];
     const [resultWalletBalance, resultMaxAmountToSend] = await Promise.all(balancePromises);
@@ -89,7 +96,10 @@
     // get plannedTokenId
     if(!store.tokenList) return // should never happen
     console.time('importRegistries');
-    await store.importRegistries(store.tokenList, false);
+    await Promise.all([
+      store.importRegistries(store.tokenList, false),
+      store.importRegistries(settingsStore.featuredTokens.map((tokenId: string) => ({tokenId} as TokenData)), false),
+    ]);
     console.timeEnd('importRegistries');
     console.time('planned tokenid');
     await store.hasPreGenesis()
@@ -114,6 +124,7 @@
         }
       }
       store.maxAmountToSend = await store.wallet?.getMaxAmountToSend();
+      store.shouldReloadHistory = true;
     });
     cancelWatchTokenTxs = store.wallet?.watchAddressTokenTransactions(async(tx) => {
       if(!store.wallet) return // should never happen
@@ -141,14 +152,17 @@
       await store.importRegistries(listNewTokens, true);
       await store.updateTokenList();
     });
+    cancelWatchBlocks = store.wallet?.watchBlocks((header: HexHeaderI) => {
+      store.currentBlockHeight = header.height;
+    }, false);
   }
 
   async function changeNetwork(newNetwork: 'mainnet' | 'chipnet'){
     // cancel active listeners
-    if(cancelWatchBchtxs && cancelWatchTokenTxs){
-      cancelWatchBchtxs()
-      cancelWatchTokenTxs()
-    }
+    cancelWatchBchtxs?.()
+    cancelWatchTokenTxs?.()
+    cancelWatchBlocks?.()
+
     const walletClass = (newNetwork == 'mainnet')? Wallet : TestNetWallet;
     const newWallet = await walletClass.named(nameWallet);
     setWallet(newWallet);
@@ -239,12 +253,13 @@
   <header>
     <img :src="settingsStore.darkMode? 'images/cashonize-logo-dark.png' : 'images/cashonize-logo.png'" alt="Cashonize: a Bitcoin Cash Wallet" style="height: 85px;" >
     <nav v-if="displayView" style="display: flex; justify-content: center;" class="tabs">
-      <div @click="changeView(1)" v-bind:style="displayView == 1 ? {color: 'var(--color-primary'} : ''">BchWallet</div>
-      <div @click="changeView(2)" v-bind:style="displayView == 2 ? {color: 'var(--color-primary'} : ''">MyTokens</div>
-      <div v-if="!isMobile" @click="changeView(3)" v-bind:style="displayView == 3 ? {color: 'var(--color-primary'} : ''">CreateTokens</div>
-      <div @click="changeView(4)" v-bind:style="displayView == 4 ? {color: 'var(--color-primary'} : ''">{{isMobile?  "Connect" : "WalletConnect"}}</div>
-      <div @click="changeView(5)">
-        <img style="vertical-align: text-bottom;" v-bind:src="displayView == 5 ? 'images/settingsGreen.svg' : 
+      <div @click="changeView(1)" v-bind:style="displayView == 1 ? {color: 'var(--color-primary'} : ''">{{ isMobile ? 'Wallet' : 'BchWallet' }}</div>
+      <div @click="changeView(2)" v-bind:style="displayView == 2 ? {color: 'var(--color-primary'} : ''">{{ isMobile ? 'Tokens' : 'MyTokens' }}</div>
+      <div v-if="!isMobile && settingsStore.tokenCreation" @click="changeView(3)" v-bind:style="displayView == 3 ? {color: 'var(--color-primary'} : ''">CreateTokens</div>
+      <div v-if="settingsStore.walletConnect" @click="changeView(4)" v-bind:style="displayView == 4 ? {color: 'var(--color-primary'} : ''">{{isMobile?  "Connect" : "WalletConnect"}}</div>
+      <div @click="changeView(5)" v-bind:style="displayView == 5 ? {color: 'var(--color-primary'} : ''">History</div>
+      <div @click="changeView(6)">
+        <img style="vertical-align: text-bottom;" v-bind:src="displayView == 6 ? 'images/settingsGreen.svg' : 
           settingsStore.darkMode? 'images/settingsLightGrey.svg' : 'images/settings.svg'">
       </div>
     </nav>
@@ -255,7 +270,8 @@
     <myTokensView v-if="displayView == 2"/>
     <createTokensView v-if="displayView == 3"/>
     <connectView v-if="displayView == 4" :dappUriUrlParam="dappUriUrlParam"/>
-    <settingsMenu v-if="displayView == 5" @change-network="(arg) => changeNetwork(arg)" @change-view="(arg) => changeView(arg)"/>
+    <walletHistoryView v-if="displayView == 5"/>
+    <settingsMenu v-if="displayView == 6" @change-network="(arg) => changeNetwork(arg)" @change-view="(arg) => changeView(arg)"/>
   </main>
   <div v-if="transactionRequestWC">
     <WC2TransactionRequest :transactionRequestWC="transactionRequestWC" :dappMetadata="dappMetadata" @signed-transaction="(arg:string) => signedTransaction(arg)" @reject-transaction="rejectTransaction()"/>

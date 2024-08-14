@@ -82,7 +82,14 @@ module.exports = configure(function (/* ctx */) {
       // extendViteConf (viteConf) {},
       // viteVuePluginOptions: {},
 
-      
+      viteVuePluginOptions: {
+        template: {
+          compilerOptions: {
+            isCustomElement: (tag) => tag === ('qr-code')
+          }
+        }
+      },
+
       vitePlugins: [
         [
           nodePolyfills

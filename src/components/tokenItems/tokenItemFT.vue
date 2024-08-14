@@ -1,15 +1,17 @@
 <script setup lang="ts">
   import { ref, onMounted, toRefs, computed, watch } from 'vue';
-  import { TokenSendRequest, SendRequest  } from "mainnet-js"
+  import { TokenSendRequest, SendRequest, convert  } from "mainnet-js"
   import { decodeCashAddress } from "@bitauth/libauth"
   // @ts-ignore
   import { createIcon } from '@download/blockies';
   import alertDialog from 'src/components/alertDialog.vue'
-  import type { TokenDataFT, bcmrTokenMetadata } from "src/interfaces/interfaces"
+  import { CurrencySymbols, type TokenDataFT, type bcmrTokenMetadata } from "src/interfaces/interfaces"
   import { queryTotalSupplyFT, queryReservedSupply } from "src/queryChainGraph"
   import { useStore } from 'src/stores/store'
   import { useSettingsStore } from 'src/stores/settingsStore'
   import { useQuasar } from 'quasar'
+  import QrCodeScanDialog from '../qr/qrCodeScanDialog.vue';
+
   const $q = useQuasar()
   const store = useStore()
   const settingsStore = useSettingsStore()
@@ -33,6 +35,7 @@
   const tokenMetaData = ref(undefined as (bcmrTokenMetadata | undefined));
   const totalSupplyFT = ref(undefined as bigint | undefined);
   const reservedSupply = ref(undefined as bigint | undefined);
+  const showQrCodeDialog = ref(false);
 
   tokenMetaData.value = store.bcmrRegistries?.[tokenData.value.tokenId];
 
@@ -50,6 +53,12 @@
   const tokenName = computed(() => {
     return tokenMetaData.value?.name;
   })
+
+  const tokenPrice = ref(0);
+  setTimeout(async () => {
+    const priceInSat = await store.fetchCurrentTokenPrice(tokenData.value.tokenId);
+    tokenPrice.value = await convert(Number(tokenData.value.amount) * priceInSat, "sat", settingsStore.currency);
+  }, 1);
 
   onMounted(() => {
     const icon = createIcon({
@@ -81,7 +90,7 @@
       reservedSupply.value = await queryReservedSupply(tokenData.value.tokenId, settingsStore.chaingraph)
     }
   })
-  
+
   // Fungible token specific functionality
   function toAmountDecimals(amount:bigint){
     let tokenAmountDecimals: bigint|number = amount;
@@ -276,7 +285,19 @@
       message: errorMessage,
       icon: 'warning',
       color: "red"
-    }) 
+    })
+  }
+
+  const qrDecode = (content: string) => {
+    destinationAddr.value = content;
+  }
+  const qrFilter = (content: string) => {
+    const decoded = decodeCashAddress(content);
+    if (typeof decoded === "string" || decoded.prefix !== store.wallet?.networkPrefix || !['p2pkhWithTokens', 'p2shWithTokens'].includes(decoded.type)) {
+      return "Not a tokenaddress on current network";
+    }
+
+    return true;
   }
 </script>
 
@@ -303,15 +324,20 @@
             </div>
             <div id="childNftCommitment" style="word-break: break-all;" class="hide"></div>
           </div>
-          <div v-if="tokenData?.amount" class="tokenAmount" id="tokenAmount">Amount: 
-            {{ numberFormatter.format(toAmountDecimals(tokenData?.amount)) }} {{ tokenMetaData?.token?.symbol }}
+          <div v-if="tokenData?.amount !== undefined" style="display: flex; flex-direction: column;">
+            <div class="tokenAmount" id="tokenAmount">Amount: 
+              {{ numberFormatter.format(toAmountDecimals(tokenData?.amount)) }} {{ tokenMetaData?.token?.symbol }}
+            </div>
+            <div v-if="tokenPrice !== 0" class="tokenAmount" id="tokenAmount">Value: 
+              {{ tokenPrice }} {{ CurrencySymbols[settingsStore.currency] }}
+            </div>
           </div>
         </div>
       </div>
 
       <div class="tokenActions">
         <div class="actionBar">
-          <span @click="displaySendTokens = !displaySendTokens" style="margin-left: 10px;">
+          <span v-if="tokenData?.amount" @click="displaySendTokens = !displaySendTokens" style="margin-left: 10px;">
             <img id="sendIcon" class="icon" :src="settingsStore.darkMode? 'images/sendLightGrey.svg' : 'images/send.svg'"> send </span>
           <span @click="displayTokenInfo = !displayTokenInfo" id="infoButton">
             <img id="infoIcon" class="icon" :src="settingsStore.darkMode? 'images/infoLightGrey.svg' : 'images/info.svg'"> info
@@ -324,6 +350,8 @@
             <img id="authIcon" class="icon" :src="settingsStore.darkMode? 'images/shieldLightGrey.svg' : 'images/shield.svg'">
             <span>auth transfer</span>
           </span>
+          <span @click="store.toggleFavorite(tokenData.tokenId)" style="float:right">
+            {{ settingsStore.featuredTokens.includes(tokenData.tokenId) ? "★" : "☆" }} favorite </span>
         </div>
         <div v-if="displayTokenInfo" style="margin-top: 10px;">
           <div></div>
@@ -363,7 +391,12 @@
           Send these tokens to
           <div class="inputGroup">
             <div class="addressInputFtSend">
-              <input v-model="destinationAddr" id="tokenAddress" placeholder="token address">
+              <div style="display: flex;">
+                <input v-model="destinationAddr" id="tokenAddress" placeholder="token address">
+                <button @click="() => showQrCodeDialog = true" style="padding: 12px">
+                  <img src="images/qrscan.svg" />
+                </button>
+              </div>
             </div>
             <div class="sendTokenAmount">
               <span style="width: 100%; position: relative; ">
@@ -407,5 +440,8 @@
         </div>
       </div>
     </fieldset>
+  </div>
+  <div v-if="showQrCodeDialog">
+    <QrCodeScanDialog @hide="() => showQrCodeDialog = false" @decode="qrDecode" :filter="qrFilter"/>
   </div>
 </template>
