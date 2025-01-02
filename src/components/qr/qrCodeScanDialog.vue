@@ -81,7 +81,8 @@
             width: { min: 720 },
             height: { min: 720 },
             aspectRatio: { ideal: 1 },
-            frameRate: { min: 20 }
+            frameRate: { min: 20 },
+            facingMode: { ideal: 'environment' }
           }"
           @detect="onScannerDecode"
           @init="onScannerInit"
